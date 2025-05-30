@@ -185,12 +185,6 @@ My strategy was to leverage SOTA pre-trained audio tagging models and fine-tune 
 *   **nnAudio:** [GitHub](https://github.com/KinWaiCheuk/nnAudio)
 *   Other models explored: [PaSST](https://github.com/kkoutini/passt), [CAV-MAE](https://github.com/yuangongnd/cav-mae), [MATPAC](https://github.com/aurianworld/matpac), [EfficientAT](https://github.com/fschmid56/EfficientAT)
 
----
-
-## General Thoughts & Conclusion
-
-Leveraging powerful pre-trained models and large external datasets can yield high scores for tasks 1 and 3. Furthermore, I used powerful AI models for implementation and brainstorming (including o1-Pro, Gemini 2.5 Pro Preview, o3, and DeepResearch) which raises the question of how leaderboard performance varies depending on which AI tools are available to each student. The temptation to "chase the leaderboard" was strong and felt like it overshadowed the process of deeply understanding the problem and designing bespoke solutions from fundamental principles (except for my Siamese CNN implementation for task 2).
-
 I'll try to get a GitHub repository with my submission and a README up after the final late submission deadline (June 6th), provided the instructors are okay with it and it doesn't interfere with future offerings of this course.
 
 Looking forward to see what others experimented with for this assignment. Best of luck to everyone with future assignments and endeavors!
