@@ -1,0 +1,306 @@
+# README.md
+
+This repository contains my solution for **Assignment 1** in CSE 253 Spring 2025 at UC San Diego. It includes models for:
+
+- **Task 1: Composer Classification (symbolic, multi-class)**
+- **Task 2: Next Sequence Prediction (symbolic, binary)**
+- **Task 3: Music Tagging (continuous, multi-label, multi-class)**
+
+Below, I detail the motivation, major steps, experiments, and references used in building my solution.
+
+## 1. Task 1: Composer Classification
+
+### 1.1. Background and Motivation
+
+Task 1 provides MIDI files for classical piano music, each with a label indicating which composer (among Bach, Beethoven, Chopin, Haydn, Liszt, Mozart, Schubert, Schumann) wrote that piece. The assignment’s baseline was a **logistic regression** classifier that uses only the average pitch and average duration as features, achieving around **25%** accuracy.
+
+I wanted to surpass this baseline by a large margin. The key insights I used were:
+
+1. **Extensive Feature Engineering**: Extract many symbolic features (pitch statistics, velocity distributions, harmonic analysis, chord transitions, etc.).
+2. **Ensemble of Models**: Train multiple classifiers (XGBoost, LightGBM, TabPFN) on these features and combine their predicted probabilities.
+3. **Additional Data (ASAP)**: Augment the official “Student” training data with an open-source dataset that includes Western classical piano MIDI files.
+
+Over time, I tried more sophisticated approaches (transformers for symbolic music, large pre-trained models like MusicBERT and MidiBERT) but realized simpler “tabular” methods with well-crafted features plus extra training data often produced better results faster. The final step was adding TabPFN to the ensemble, which gave the best improvement.
+
+### 1.2. Chronology of Experiments
+
+1. **Initial Feature Engineering & XGBoost**
+   - I started by extracting around 40–50 symbolic features (pitch range, polyphony, key detection, etc.) from each MIDI.
+   - Ran XGBoost on these features. Accuracy rose to ~0.63 on the public leaderboard, a significant jump from the ~0.25 baseline.
+
+2. **Pre-trained Transformers**
+   - I experimented with **MusicBERT** (see [musicbert_hf repo](https://github.com/malcolmsailor/musicbert_hf)), **MidiBERT** (see [MIDI-BERT GitHub](https://github.com/wazenmai/MIDI-BERT)), **PianoBart** ([PianoBART GitHub](https://github.com/RS2002/PianoBart/tree/main), [IEEE paper](https://ieeexplore.ieee.org/document/10688332)), and **Adversarial MidiBERT** ([Adversarial-MidiBERT repo](https://github.com/RS2002/Adversarial-MidiBERT/tree/main), [arXiv paper](https://arxiv.org/abs/2407.08306)). While these advanced methods have shown strong results in studies cited in their papers (e.g., Adversarial-MidiBERT claims an accuracy above 97 % with pre-training using the ASAP and other datasets for composer classification), I found it difficult to replicate those high accuracies claimed in the frameworks' papers with the small training portion provided in the assignment (plus, pre-training MidiBERT with the training data provided took 3 hours on an RTX 4080 GPU and yielded ~66 % accuracy on the public leaderboard).
+
+3. **Bigger Feature Set**
+   - I extended my symbolic feature extraction to a massive 364-dimensional vector (expanded with advanced tonal, harmonic, chord-based, and rhythmic metrics).
+   - Features included chord detection, Markov transition probabilities for intervals, chord progression entropy, velocity autocorrelation, bar-level pitch means, time signature changes, and many more.
+   - This alone (with XGBoost) yielded ~0.68 on the public leaderboard.
+
+4. **Incorporating the ASAP Dataset**
+   - I noticed that renditions of many classical piano pieces and their MIDI transcriptions are widely available in open-source form. I saw posts on Piazza ([@166](https://piazza.com/class/m8rskujtdvsgy/post/166), [@178](https://piazza.com/class/m8rskujtdvsgy/post/178)) allowing the use of pre-trained models with open-source weights, even though they may have potentially seen the test data during training time, and so I considered using additional public datasets with open-source licenses.
+   - I added [ASAP](https://github.com/fosfrancesco/asap-dataset) (Aligned Scores and Performances), which has ~1,290 MIDI files, because it was used frequently for pre-training some of the other transformers based models referenced above. Because the MIDI files in the test dataset were anonymized (or perhaps synthetically generated?), there was no way for me to confirm that it didn't overlap with the ASAP dataset (or any of the other datasets I experimented with). I filtered and recognized the composer’s name for each piece (Bach, Beethoven, Chopin, Haydn, Liszt, Mozart, Schubert, Schumann) using the dataset's metadata file.
+   - Combined with the “Student” training data from the assignment, I had a bigger training set. This helped avoid overfitting.
+
+5. **Multi-Model Ensemble**
+   - I then trained three classifiers on the combined training data:
+     1. **XGBoost** ([Docs](https://xgboost.readthedocs.io/en/latest/python/python_api.html#xgboost.XGBClassifier))
+     2. **LightGBM** ([GitHub](https://github.com/microsoft/LightGBM))
+     3. **TabPFN** ([GitHub](https://github.com/PriorLabs/TabPFN), [arXiv paper](https://arxiv.org/pdf/2207.01848.pdf))
+   - Each model outputs probabilities. I took a **convex combination** of these probability distributions, with tunable weights: `xgb_weight=0.3`, `tpf_weight=0.6`, etc. This helped push accuracy to eventually ~0.99+ on the public Gradescope leaderboard.
+
+**Result**: The public leaderboard accuracy reached **0.9949748743718593** for Task 1.
+
+### 1.3. Implementation Details
+
+- **Symbolic Feature Extraction**
+  I parse each MIDI file using [miditoolkit](https://github.com/YatingMusic/miditoolkit) and [pretty_midi](https://github.com/craffel/pretty-midi). Then compute an extensive feature vector (364 dimensions).
+  - Each dimension is carefully computed: pitch stats, velocity histograms, chord-based features, REMI token sequences, Markov chain probabilities, PCA on pitch classes, etc.
+  - I store these in a NumPy array so that training is purely “tabular.”
+
+- **ASAP Data Merging**
+  - For each MIDI in ASAP, I canonicalize the composer’s name to one of {Bach, Beethoven, Chopin, Haydn, Liszt, Mozart, Schubert, Schumann}.
+  - If a piece was too long, I automatically “split” it into smaller chunks of 65 beats (which is approximately the mean number of beats of the provided training dataset) so training wouldn’t contain extremely large single examples.
+  - Extended the training set from the official “Student” data to ASAP.
+
+- **Training**
+  - I do a local `train_test_split` on the combined dataset to hold out about 8 samples for quick validation (in reality, a very small fraction for the actual, final training).
+  - Trained:
+    - **XGBoost** with `tree_method="hist", max_depth=10, eta=0.15`, etc.
+    - **LightGBM** with `device_type="gpu", random_state=42`, etc.
+    - **TabPFN** with `device="cuda"`.
+  - Ensemble the probabilities in a final step.
+
+- **Feature Importance** (XGBoost example)
+    To illustrate which features had the greatest impact on classification, I computed
+    the **XGBoost gain** for each feature (after training on the combined dataset). The
+    table below shows the **top 15** features, their names, a short descriptive note, and
+    the model-assigned **gain** (higher = more important in the splitting process).
+
+    | Rank | Feature Name               | Short Description                                                                                          | XGBoost Gain |
+    |-----:|:---------------------------|:-----------------------------------------------------------------------------------------------------------|-------------:|
+    |  1.  | global_pitch_range_density | Ratio of pitch range (max - min) to the full 127-step MIDI range                                          | 26.916185    |
+    |  2.  | pitch_range                | Difference between maximum and minimum pitch                                                              | 17.187300    |
+    |  3.  | turn_ornament_density      | Density of "turn" ornaments in the melodic line (approx. # turn patterns / total bars)                    | 11.673298    |
+    |  4.  | pitch_max                  | Maximum pitch value in the piece (0–127)                                                                   |  7.823633    |
+    |  5.  | direction_change_mad       | Median absolute deviation of consecutive interval directions                                              |  4.803987    |
+    |  6.  | pitch_min                  | Minimum pitch value in the piece (0–127)                                                                   |  4.715915    |
+    |  7.  | dur_bin_0                  | Fraction of notes whose duration is under 0.125 beats                                                     |  4.528508    |
+    |  8.  | bar_pitch_mean_std         | Standard deviation of bar-level average pitch                                                             |  4.043872    |
+    |  9.  | pitch_mean                 | Mean pitch value in the piece (0–127)                                                                      |  3.918227    |
+    | 10.  | high_reg_density           | Ratio of notes with pitch >= 84 (i.e. upper registers) to total notes                                     |  3.886408    |
+    | 11.  | seventh_chord_count        | Count of recognized seventh chords (major/minor triads + a 7th)                                            |  3.733670    |
+    | 12.  | pitch_95_5_range           | Difference between the 95th and 5th percentile pitch                                                       |  3.502671    |
+    | 13.  | ic_dist_3                  | Normalized measure of how often 3-semitone intervals occur in the melodic line                            |  3.440810    |
+    | 14.  | vel_min                    | Minimum velocity (0–127)                                                                                  |  3.432241    |
+    | 15.  | frac_chromatic_moves       | Proportion of intervals that are exactly 1 semitone                                                       |  3.274476    |
+
+  This suggests that certain pitch-based stats, ornamentation, and chord-based intricacies are strong indicators of composer style.
+
+### 1.4. How to Run
+
+1. **Install**
+   - `pip install miditoolkit pretty_midi xgboost lightgbm tabpfn torch torchaudio`
+   - Also ensure `numpy`, `pandas`, and `sklearn` are available.
+
+2. **Place the ASAP Dataset**
+   - Download [ASAP](https://github.com/fosfrancesco/asap-dataset) (or just the relevant `metadata.csv` + MIDI files) into a subdirectory, e.g. `./asap-dataset`.
+
+3. **Run**
+   - `python assignment1.py` (or open the provided Jupyter notebook).
+   - It will read all “student_files/task1_composer_classification/train.json” plus the ASAP data, do feature extraction, train the ensemble, and then produce the final predictions as `predictions1.json`.
+
+### 1.5. References
+
+- **NLP-based Music Processing for Composer Classification**:
+  Somrudee Deepaisarn et al., _Scientific Reports_, 2023. [PubMedCentral PMC10425398](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC10425398/)
+- **Composer Style Classification of Piano Sheet-Music Images Using Language-Model Pretraining**:
+  TJ Tsai, Kevin Ji, ISMIR 2020. [arXiv:2007.14587](https://arxiv.org/abs/2007.14587)
+- **Large-Scale MIDI-Based Composer Classification**:
+  Qiuqiang Kong, Keunwoo Choi, Yuxuan Wang, 2020. [arXiv:2010.14805](https://arxiv.org/abs/2010.14805)
+- **MusicBERT**: [GitHub](https://github.com/malcolmsailor/musicbert_hf)
+- **MidiBERT**: [GitHub](https://github.com/wazenmai/MIDI-BERT)
+- **Adversarial MidiBERT**: [GitHub](https://github.com/RS2002/Adversarial-MidiBERT/tree/main) | [arXiv:2407.08306](https://arxiv.org/abs/2407.08306)
+- **PianoBART**: [GitHub](https://github.com/RS2002/PianoBart/tree/main) | [IEEE Xplore Paper](https://ieeexplore.ieee.org/document/10688332)
+- **ASAP**: (Aligned Scores and Performances) [GitHub](https://github.com/fosfrancesco/asap-dataset)
+- **MAESTRO**: [(MIDI and Audio Edited for Synchronous TRacks and Organization)](https://magenta.tensorflow.org/datasets/maestro) – ≈ 200 h of aligned piano performances from the International Piano-e-Competition. Hawthorne et al., ICLR 2019
+- **GiantMIDI-Piano**: [Hugging Face link](https://huggingface.co/datasets/roszcz/giant-midi-base-v2)
+- **Metacreation.net**: [Metacreation Lab for Creative AI](https://www.metacreation.net/dataset)
+- **LightGBM**: [GitHub](https://github.com/microsoft/LightGBM)
+- **XGBoost**: [Docs](https://xgboost.readthedocs.io/en/latest/python/python_api.html#xgboost.XGBClassifier)
+- **TabPFN**: [GitHub](https://github.com/PriorLabs/TabPFN) | [arXiv:2207.01848](https://arxiv.org/pdf/2207.01848.pdf)
+
+## 2. Task 2: Next Sequence Prediction (Symbolic, Binary)
+
+**Goal**: Given two short MIDI files (representing adjacent bars or phrases), determine if the second bar truly follows the first in a real piece of music. We must output a binary label (“True” if they are consecutive bars, “False” otherwise). The official evaluation metric is accuracy.
+
+### 2.1. Overview of My Approaches
+
+I experimented with two main strategies:
+
+1. **Siamese Byte-CNN Classifier (final best approach)**
+   - **Raw Byte Input**: Instead of extracting hand-crafted music features, I parsed the raw bytes of each MIDI file. Specifically:
+     - For the first bar (candidate predecessor), I took the last *N* bytes (“tail”) from the file.
+     - For the second bar (candidate successor), I took the first *N* bytes (“head”) from the file.
+     - Each bar’s MIDI file was padded or truncated so that the model consistently processes *N* bytes per bar (e.g., `SEG_LEN=4096` in my final code).
+   - **Embedding + CNN**:
+     1. I convert each byte (0–255) into an integer token. A special token (256) is used for padding.
+     2. These tokens pass through an embedding layer (`VOCAB_SIZE=257, EMBED_DIM=256`) to produce a sequence of 256-dimensional vectors.
+     3. I apply multiple 1D CNN filters (with kernel sizes 3, 5, 7) to capture local patterns in the byte sequence, then pool to obtain a fixed-size representation of each bar.
+   - **Siamese Architecture**:
+     - I have one “byte encoder” that transforms each bar’s bytes into a single feature vector.
+     - To classify whether bar B follows bar A, I concatenate `(encoder(A), encoder(B), |encoder(A)−encoder(B)|, encoder(A)*encoder(B))` and feed these into a small feed‑forward network with ReLU and Dropout, yielding a binary logit for True/False.
+   - **One‑Neighbor Constraint**:
+     - After computing probabilities for all candidate pairs, I apply a greedy post-processing step:
+       > Each bar can only appear in **at most one** True edge as a tail, and **at most one** True edge as a head.
+     - Sort all pairs by descending probability. For each pair, mark it “True” only if neither bar has been used in a “True” pair so far. Otherwise mark “False.” This step enforces a “proper adjacency” matching and dramatically improves accuracy (from ~0.972 to ~0.9987 on the public leaderboard).
+
+2. **Feature-Based XGBoost/LightGBM Classifier (alternative approach)**
+   - **Symbolic Feature Extraction**: I parse each bar’s MIDI to compute ~15–30 numeric features (pitch range, key signature, average velocity, melodic intervals, etc.).
+   - **Pairwise Features**: Concatenate the two bars’ feature vectors, plus their absolute difference, into a single input for a gradient-boosted classifier.
+   - **One‑Neighbor Constraint**: Same post-processing logic as above, ensuring a bar’s tail or head is used only once.
+   - While this approach also gave high accuracy (around ~0.9960 on the public leaderboard), the raw-byte CNN ultimately performed better.
+
+### 2.2. Implementation Details
+
+1. **Data Reading**
+   - I read `train.json` (which may contain pairs and labels like `{("barA.mid","barB.mid"):true, ...}`) and `test.json` (pairs with no labels).
+   - For each bar, I load its raw bytes, extracting either the “tail” (last `SEG_LEN` bytes) or “head” (first `SEG_LEN` bytes) into a NumPy array. If the file is shorter than `SEG_LEN`, I pad it with a special token (256).
+   - *Choosing `SEG_LEN = 4096`.*  Before training I scanned every unique bar in `train.json` + `test.json` and plotted their file sizes.
+     - **min = 86 bytes, median ≈ 549 bytes, 99th perc. ≈ 1 702 bytes, max = 16 009 bytes**.
+     - A 4 096-byte window (a power-of-two that plays nicely with GPU tensor shapes) comfortably covers > 99 % of bars while keeping batches small enough for my local 12 GB VRAM GPU.
+     - Bars shorter than 4 096 bytes are padded with the special token 256; longer bars are truncated (tail for the predecessor, head for the successor).
+
+2. **Siamese Network**
+   - The **ByteEncoder** is a stack of:
+     - **nn.Embedding** of size 257 → 256, with padding index = 256.
+     - **Conv1d layers**: kernel sizes 3, 5, 7 (output 128 channels each), each followed by ReLU + adaptive max pooling over time.
+     - These pooled features are concatenated into a single 384-dimensional vector (3×128).
+   - The **PairClassifier** then combines `(encoder(A), encoder(B), abs-diff, elementwise-mul)` → feed‑forward → single logit.
+
+3. **Training**
+   - I train with **Binary Cross-Entropy Loss** (sigmoid-based) and an AdamW optimizer (`lr=3e-4`, `EPOCHS=10`, batch size = 256).
+   - After each epoch, I measure training accuracy and AUC. By epoch ~10, the model converges well.
+
+4. **Inference & Constrained Selection**
+   - I apply the model to every (A,B) pair in `test.json`, compute a probability for adjacency.
+   - **Greedy Selection** (descending by probability) ensures each bar is used as a predecessor or successor at most once.
+   - This final adjacency constraint significantly boosts accuracy from about 0.974 to **~0.998** on the public leaderboard.
+
+### 2.3. Results & Observations
+
+- The raw-byte Siamese CNN approach leverages fine-grained information like MIDI event ordering, control changes, and exact encoding details that a simpler symbolic feature approach might miss.
+- The adjacency constraint is critical in this setting: multiple bars in the test set could pair with the same neighbor, but in reality, each bar can only follow exactly one previous bar and precede exactly one next bar in a piece.
+- Though an **XGBoost/LightGBM/AutoGluon/TabPFN/CatBoost** approach with carefully-engineered features came close (~0.9960), the byte-level CNN plus adjacency constraint was the best method I found.
+
+**Result**: The public leaderboard accuracy reached **0.9986936642717178** for Task 2.
+
+## 3. Task 3: Music Tagging (Continuous, Multi-Label, Multi-Class)
+
+### 3.1. Overview and Motivation
+
+In this task, the goal is to predict a set of tags (e.g., “electronic”, “chill”, “rock”, etc.) associated with an audio file. Each file in the training set has one or more tags drawn from a predefined label space (e.g., 10 distinct tags). On the test set, which does **not** provide ground-truth labels, we must output a multilabel prediction for each audio clip. The evaluation metric is **mean average precision (mAP)**. The baseline code provided in the assignment used a fairly simple CNN on MelSpectrograms, achieving roughly **0.27** mAP on the public leaderboard.
+
+I set out to significantly improve over the baseline by leveraging **state-of-the-art audio tagging** models, many of which are pre-trained on large datasets such as [AudioSet](https://research.google.com/audioset/) or [MagnaTagATune](https://mirg.city.ac.uk/codeapps/the-magnatagatune-dataset). After an extensive sequence of experiments, I converged on a **fine-tuned M2D** (Masked Modeling Duo) model with careful hyperparameter tuning, data augmentation, and training strategies, pushing my final public-board mAP to around **0.52**.
+
+### 3.2. Chronology of Experiments
+
+1. **Initial Trials with Audio Spectrogram Transformers (AST) on Hugging Face**
+   I started with [MIT’s AST models](https://huggingface.co/MIT) (e.g., `ast-finetuned-audioset-10-10-0.4593`, `ast-finetuned-audioset-14-14-0.443`) and also a [fine-tuned AST on GTZAN data](https://huggingface.co/killynguyen/ast-finetuned-audioset-10-10-0.4593-finetuned-gtzan). Some of these gave a public mAP around 0.45–0.46. While this already exceeded the baseline by a wide margin, I believed it was still possible to push further.
+
+2. **Survey of SOTA Music Tagging Models**
+   Through [Papers with Code](https://paperswithcode.com/sota/music-tagging-on-magnatagatune) and [audio tagging benchmarks](https://paperswithcode.com/sota/audio-tagging-on-audioset), I identified multiple promising architectures, including:
+
+   * **PaSST** ([GitHub](https://github.com/kkoutini/passt)): An efficient training approach for audio transformers by patching out parts of the spectrogram.
+   * **CAV-MAE** ([GitHub](https://github.com/yuangongnd/cav-mae)): Contrastive Audio-Visual Masked Autoencoders.
+   * **MATPAC** ([GitHub](https://github.com/aurianworld/matpac)): Masked latent Prediction And Classification.
+   * **EfficientAT** ([GitHub](https://github.com/fschmid56/EfficientAT)): Pre-trained CNNs for Audio Pattern Recognition.
+   * **M2D** ([GitHub](https://github.com/nttcslab/m2d)): Masked Modeling Duo, which can achieve strong results on AudioSet and be transferred to many tasks.
+
+   I implemented or adapted multiple of these, fine-tuned them on the training data (plus various external data or augmentation) and measured mAP on the public set. Most single approaches hovered between 0.44 and 0.46.
+
+3. **Ensemble Strategies**
+   I attempted ensembling the predictions of these advanced models (PaSST, AST, M2D, etc.), which yielded a small boost (up to \~0.478). However, each additional model increased complexity and GPU usage. I ultimately decided to pick the single best approach after hyperparameter tuning, rather than rely on a large ensemble.
+
+4. **Magnatagatune Dataset Integration**
+   I explored adding out-of-domain data from [MagnaTagATune](https://mirg.city.ac.uk/codeapps/the-magnatagatune-dataset). I downloaded \~30-second MP3s, chopped each into 10-second WAV clips at 16 kHz, and tried partial fine-tuning on these data combined with the assignment’s training set. I also experimented with removing vocals or isolating certain instruments using [Demucs v4](https://github.com/facebookresearch/demucs). Although these expansions did not consistently improve the final leaderboard mAP, they helped me learn more robust augmentation pipelines.
+
+5. **MusicGen-based Extensions**
+   On a whim, I tried using [MusicGen-Large by Facebook AI](https://huggingface.co/facebook/musicgen-large) to *extend* or "complete" each training/test clip by an extra 10 seconds of generative content, aiming to see if that boosted the classifier’s data variation. This turned out to be extremely time-consuming and did not show a measurable improvement in my final mAP.
+
+6. **Final Approach with M2D**
+   I ultimately settled on [**M2D (Masked Modeling Duo)**](https://github.com/nttcslab/m2d) because:
+
+   * It provides a powerful audio feature backbone pre-trained on AudioSet.
+   * It has a straightforward pipeline for adding a new classification head and doing partial or full fine-tuning.
+   * In my experiments, M2D produced a strong single-model result (\~0.46–0.48 mAP out of the box), and after hyperparameter tuning (especially adjusting learning rates, weight decay, and data augmentation schemes), it reached **\~0.52** on the public leaderboard.
+
+**Result**: The public leaderboard mAP reached **0.5270201135580944** for Task 3.
+
+### 3.3. Implementation Details
+
+* **Model Architecture**:
+  The final system is essentially the “M2D-CLAP ViT-Base” encoder with a small classification head. I load a checkpoint (e.g., `m2d_clap_vit_base-80x1001p16x16-240128_AS-FT_enconly`) from the [M2D releases](https://github.com/nttcslab/m2d/releases), then add:
+
+  1. A 2D log-mel spectrogram front-end (using [nnAudio](https://github.com/KinWaiCheuk/nnAudio)).
+  2. A projection head (LayerNorm + Linear) to output `N_TAGS` (=10) logits.
+
+* **Training**:
+
+  1. **Data Augmentation**:
+
+     * Random cropping each audio to 10 seconds.
+     * Light on-the-fly augmentations: random gain jitter, pink noise injection, minimal frequency/time masking, etc.
+  2. **Phased Fine-Tuning**:
+
+     * Initially **freeze** the M2D backbone → train only the final head for 1–2 epochs.
+     * Unfreeze the last 4 Transformer blocks → train at a smaller LR for a few epochs.
+     * Finally unfreeze the entire backbone for an additional epoch.
+       This 3-stage approach prevents catastrophic forgetting and helps the model adapt gently to the new tags.
+
+* **Threshold Selection**:
+  Because it is a **multi-label** problem, I must choose an independent threshold for each tag. I gather predictions on a local validation subset, compute the tag-wise precision-recall curves, and pick each tag’s threshold to maximize F1. Those thresholds typically vary around 0.4–0.6.
+
+* **Silent Clips & Edge Cases**:
+  Roughly 100+ .wav files in the dataset appear to have extremely low amplitude or near-silence. I tested removing them and substituting artificial noise or random music (e.g., from external sets), but saw no improvement. Ultimately, I simply kept them in for consistency.
+
+### 3.4. Results and Observations
+
+1. **mAP**:
+
+   * The final M2D-based system achieves a **\~0.52** mean average precision on the public leaderboard, exceeding both the official baseline (0.27) and many of my earlier attempts (0.44–0.48).
+2. **Transfer Learning**:
+
+   * Pre-trained models on large-scale audio datasets (AudioSet or MagnaTagATune) offer an immediate advantage for small training sets.
+3. **Augmentation**:
+
+   * *Random cropping* to a fixed 10-s window is crucial. More advanced augmentation (frequency masking, demucs-based separation, etc.) occasionally helps but can also be unstable in final performance.
+4. **Thresholding**:
+
+   * Tuning tag-specific thresholds is extremely important for maximizing mAP. Using a single “0.5” threshold for all tags typically yields a slightly worse performance.
+5. **Ensembling**:
+
+   * Although combining M2D with AST or PaSST gave a modest improvement (\~0.478 ensembling partial checks), the best single system (M2D with partial fine-tuning) plus thoughtful hyperparams was simpler and stronger.
+
+### 3.5. References
+
+Below are links and references for the methods, models, and data sources used:
+
+* **M2D** ([Masked Modeling Duo](https://github.com/nttcslab/m2d)):
+  D. Niizumi et al., “Masked Modeling Duo: Towards a Universal Audio Pre-training Framework,” *IEEE/ACM Trans. Audio, Speech, Language Processing*, 2024.
+* **Audio Spectrogram Transformer (AST)** models:
+  [Hugging Face](https://huggingface.co/MIT/ast-finetuned-audioset-10-10-0.4593)
+  Y. Gong et al., “AST: Audio Spectrogram Transformer,” *Interspeech* 2021.
+* **PaSST**:
+  K. Koutini et al., “PaSST: Efficient Training of Audio Transformers with Patchout,” [GitHub Repo](https://github.com/kkoutini/passt).
+* **CAV-MAE**:
+  Y. Gong et al., “Contrastive Audio-Visual Masked Autoencoder,” [GitHub Repo](https://github.com/yuangongnd/cav-mae).
+* **MATPAC**:
+  A. Cordahi, “MATPAC: Masked latent Prediction And Classification,” [GitHub Repo](https://github.com/aurianworld/matpac).
+* **EfficientAT**:
+  [F. Schmid et al., “Efficient Pre-Trained CNNs for Audio Pattern Recognition”](https://github.com/fschmid56/EfficientAT).
+* **MagnaTagATune**:
+  E. Law, K. West, M. I. Mandel, M. Bay, and S. Downie, “Evaluation of Algorithms Using Games: The Case of Music Tagging,” *ISMIR* 2009.  [Dataset](https://mirg.city.ac.uk/codeapps/the-magnatagatune-dataset)
+* **MusicGen**:
+  [Hugging Face Model](https://huggingface.co/facebook/musicgen-large).
+* **MetaScore**:
+  W. Xu, J. McAuley, T. Berg-Kirkpatrick, S. Dubnov, H-W. Dong, “Generating Symbolic Music from Natural Language Prompts using an LLM-Enhanced Dataset,” [GitHub Repo](https://github.com/wx83/MetaScore_Official).
