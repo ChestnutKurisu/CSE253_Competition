@@ -1,4 +1,4 @@
-It's been a fantastic experience working alongside all of you in this class, and I've really enjoyed getting to know some of you! I explored a range of techniques, from extensive feature engineering to leveraging large pre-trained models.
+## [Link to Competition Guidelines](https://docs.google.com/document/d/1crq3eqtnBHs5UyIhst_C0u6e65uQ4bj2miv4SPjycXo/export?format=pdf)
 
 ## Final Results (ranks based on the Gradescope leaderboard; 1,272 students participated in the competition)
 
