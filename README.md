@@ -184,7 +184,3 @@ My strategy was to leverage SOTA pre-trained audio tagging models and fine-tune 
 *   **Audio Spectrogram Transformer (AST):** [Hugging Face](https://huggingface.co/MIT/ast-finetuned-audioset-10-10-0.4593)
 *   **nnAudio:** [GitHub](https://github.com/KinWaiCheuk/nnAudio)
 *   Other models explored: [PaSST](https://github.com/kkoutini/passt), [CAV-MAE](https://github.com/yuangongnd/cav-mae), [MATPAC](https://github.com/aurianworld/matpac), [EfficientAT](https://github.com/fschmid56/EfficientAT)
-
-I'll try to get a GitHub repository with my submission and a README up after the final late submission deadline (June 6th), provided the instructors are okay with it and it doesn't interfere with future offerings of this course.
-
-Looking forward to see what others experimented with for this assignment. Best of luck to everyone with future assignments and endeavors!
